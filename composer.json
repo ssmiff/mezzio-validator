@@ -1,0 +1,82 @@
+{
+    "name": "ssmiff/mezzio-validator",
+    "description": "Request validation for Mezzio: laminas-inputfilter rules declared per request, injected with #[UseValidator].",
+    "type": "library",
+    "license": "MIT",
+    "keywords": [
+        "mezzio",
+        "validation",
+        "inputfilter",
+        "laminas"
+    ],
+    "homepage": "https://github.com/ssmiff/mezzio-validator",
+    "authors": [
+        {
+            "name": "Scott Smith",
+            "email": "scott@ssmiff.uk"
+        }
+    ],
+    "support": {
+        "issues": "https://github.com/ssmiff/mezzio-validator/issues",
+        "source": "https://github.com/ssmiff/mezzio-validator"
+    },
+    "repositories": [
+        {
+            "type": "vcs",
+            "url": "https://github.com/ssmiff/mezzio-container-helpers"
+        }
+    ],
+    "require": {
+        "php": "~8.5.0",
+        "laminas/laminas-filter": "^2.40",
+        "laminas/laminas-inputfilter": "^2.31",
+        "laminas/laminas-servicemanager": "^3.22",
+        "laminas/laminas-validator": "^2.64",
+        "psr/container": "^1.1 || ^2.0",
+        "psr/http-factory": "^1.0",
+        "psr/http-message": "^1.1 || ^2.0",
+        "psr/http-server-handler": "^1.0",
+        "psr/http-server-middleware": "^1.0",
+        "ssmiff/mezzio-container-helpers": "^0.1"
+    },
+    "require-dev": {
+        "friendsofphp/php-cs-fixer": "^3.95",
+        "laminas/laminas-diactoros": "^3.8",
+        "phpunit/phpunit": "^11.5",
+        "psalm/plugin-phpunit": "^0.19.5",
+        "squizlabs/php_codesniffer": "^4.0",
+        "vimeo/psalm": "^6.13"
+    },
+    "autoload": {
+        "psr-4": {
+            "Ssmiff\\MezzioValidator\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Ssmiff\\MezzioValidator\\Test\\": "test/"
+        }
+    },
+    "extra": {
+        "laminas": {
+            "config-provider": "Ssmiff\\MezzioValidator\\ConfigProvider"
+        }
+    },
+    "config": {
+        "sort-packages": true
+    },
+    "scripts": {
+        "check": [
+            "@cs-check",
+            "@static-analysis",
+            "@test"
+        ],
+        "static-analysis": "psalm --no-cache --stats",
+        "test": "phpunit --colors=always",
+        "cs-check": [
+            "php-cs-fixer fix --dry-run --diff",
+            "phpcs"
+        ],
+        "cs-fix": "php-cs-fixer fix"
+    }
+}

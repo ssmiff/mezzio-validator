@@ -42,7 +42,7 @@ abstract class AbstractRequestValidator implements RequestValidator
         $filter->setData($this->data($request));
 
         if (! $filter->isValid()) {
-            throw new ValidationFailed($filter->getMessages());
+            throw new ValidationFailed($filter->getMessages()->toArray());
         }
 
         /** @var array<array-key, mixed> $values */

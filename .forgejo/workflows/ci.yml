@@ -1,0 +1,51 @@
+# Runs on the Forgejo runner (internal). Every step happens inside a throwaway PHP 8.5 container
+# that is built once and then cached on the runner, with composer's download cache kept between runs.
+# Needs the GH_READ_TOKEN organisation secret (set by Terraform) to fetch private ssmiff packages.
+name: CI
+
+on:
+  push:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PHP_VERSION: "8.5"
+
+jobs:
+  check:
+    name: ${{ matrix.check }}
+    runs-on: debian
+    strategy:
+      fail-fast: false
+      matrix:
+        check: [cs-check, static-analysis, test]   # composer scripts: PER-CS 3.0, Psalm, PHPUnit
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: PHP 8.5 with composer
+        run: |
+          docker build -q -t "ci-php:$PHP_VERSION" --build-arg "PHP=$PHP_VERSION" - <<'DOCKERFILE'
+          ARG PHP=8.5
+          FROM php:${PHP}-cli
+          COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
+          RUN apt-get update \
+           && apt-get install -y --no-install-recommends git unzip libicu-dev \
+           && docker-php-ext-install intl \
+           && rm -rf /var/lib/apt/lists/*
+          DOCKERFILE
+
+      - name: composer ${{ matrix.check }}
+        env:
+          COMPOSER_AUTH: '{"github-oauth":{"github.com":"${{ secrets.GH_READ_TOKEN }}"}}'
+          CHECK: ${{ matrix.check }}
+        run: |
+          mkdir -p "$HOME/.cache/composer-ci"
+          docker run --rm --user "$(id -u):$(id -g)" \
+            -e HOME=/tmp -e COMPOSER_HOME=/tmp/composer -e COMPOSER_CACHE_DIR=/cache -e COMPOSER_AUTH -e CHECK \
+            -v "$HOME/.cache/composer-ci:/cache" -v "$PWD:/app" -w /app \
+            "ci-php:$PHP_VERSION" sh -ec '
+              composer install --no-interaction --prefer-dist --no-progress
+              composer "$CHECK"
+            '

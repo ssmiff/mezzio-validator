@@ -17,14 +17,14 @@ use function is_subclass_of;
 final readonly class RequestValidatorAbstractFactory implements AbstractFactoryInterface
 {
     #[Override]
-    public function canCreate(ContainerInterface $container, $requestedName): bool
+    public function canCreate(ContainerInterface $container, string $requestedName): bool
     {
         return is_subclass_of($requestedName, RequestValidator::class)
             && new ReflectionClass($requestedName)->isInstantiable();
     }
 
     #[Override]
-    public function __invoke(ContainerInterface $container, $requestedName, ?array $options = null): object
+    public function __invoke(ContainerInterface $container, string $requestedName, ?array $options = null): object
     {
         return new AttributeFactory()($container, $requestedName);
     }

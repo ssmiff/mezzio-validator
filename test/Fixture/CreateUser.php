@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Ssmiff\MezzioValidator\Test\Fixture;
 
+/** @psalm-suppress PossiblyUnusedProperty the fixture's properties are read through the validator mapping under test */
 final readonly class CreateUser
 {
     public function __construct(

@@ -10,6 +10,7 @@ use Override;
 use Psr\Http\Message\ServerRequestInterface;
 use Ssmiff\MezzioValidator\Exception\ValidationFailed;
 
+use function array_filter;
 use function is_array;
 
 /**
@@ -39,16 +40,16 @@ abstract class AbstractRequestValidator implements RequestValidator
             $filter->add(['name' => $field, ...$spec]);
         }
 
-        $filter->setData($this->data($request));
+        $result = $filter->validate($this->data($request));
 
-        if (! $filter->isValid()) {
-            throw new ValidationFailed($filter->getMessages()->toArray());
+        if (! $result->valid()) {
+            // The result lists every field, with no messages for those that passed.
+            throw new ValidationFailed(
+                array_filter($result->getMessages()->toArray(), static fn($messages): bool => $messages !== []),
+            );
         }
 
-        /** @var array<array-key, mixed> $values */
-        $values = $filter->getValues();
-
-        return $this->map($values);
+        return $this->map($result->value());
     }
 
     /**

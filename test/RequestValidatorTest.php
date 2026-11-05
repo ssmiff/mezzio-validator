@@ -93,6 +93,7 @@ final class RequestValidatorTest extends TestCase
     {
         /** @var array<string, mixed> $dependencies */
         $dependencies = [];
+        /** @psalm-suppress InternalClass laminas-inputfilter offers no other way to register its services in a test */
         foreach ([
             new HelpersConfigProvider(),
             new \Laminas\Filter\ConfigProvider(),
@@ -105,6 +106,7 @@ final class RequestValidatorTest extends TestCase
             $dependencies = array_replace_recursive($dependencies, $config['dependencies']);
         }
 
+        /** @psalm-suppress MixedArgumentTypeCoercion the merged provider config is a plain dependencies array */
         return new ServiceManager($dependencies);
     }
 }

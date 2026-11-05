@@ -7,6 +7,7 @@ namespace Ssmiff\MezzioValidator\Test;
 use Laminas\Diactoros\Response\EmptyResponse;
 use Laminas\Diactoros\ResponseFactory;
 use Laminas\Diactoros\ServerRequest;
+use Override;
 use PHPUnit\Framework\TestCase;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
@@ -23,6 +24,7 @@ final class ValidationFailedMiddlewareTest extends TestCase
     public function testAValidationFailureBecomesA422JsonResponse(): void
     {
         $handler = new class implements RequestHandlerInterface {
+            #[Override]
             public function handle(ServerRequestInterface $request): ResponseInterface
             {
                 throw new ValidationFailed(['title' => ['isEmpty' => 'required']]);
@@ -42,6 +44,7 @@ final class ValidationFailedMiddlewareTest extends TestCase
     public function testOtherResponsesPassThrough(): void
     {
         $handler = new class implements RequestHandlerInterface {
+            #[Override]
             public function handle(ServerRequestInterface $request): ResponseInterface
             {
                 return new EmptyResponse(204);

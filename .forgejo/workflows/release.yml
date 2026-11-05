@@ -1,0 +1,52 @@
+# Publishes a version to the internal Composer repository (Satis, composer.ssmiff.uk) when it is tagged.
+# Satis reads this repository's tags from GitHub, so there is nothing to upload: this asks Satis to rebuild now
+# instead of waiting for its next scheduled build, then waits until the version is listed.
+# Needs the REGISTRY_PUBLISH_TOKEN organisation secret (user ci-publish, group composer-publish).
+#
+# Run by hand with the name of an existing tag to publish a version tagged before this workflow existed.
+name: Publish to the Composer repository
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+      - '[0-9]*.[0-9]*.[0-9]*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'An existing tag, e.g. v1.2.0'
+        required: true
+
+concurrency:
+  group: registry-publish-${{ github.repository }}
+  cancel-in-progress: false
+
+env:
+  COMPOSER_REGISTRY: http://10.10.10.5:18080
+
+jobs:
+  publish:
+    name: Satis
+    runs-on: debian
+    steps:
+      - name: Ask Satis to rebuild, then wait for the version
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
+          PACKAGE: ${{ github.repository }}
+          REGISTRY_USER: ci-publish
+          REGISTRY_TOKEN: ${{ secrets.REGISTRY_PUBLISH_TOKEN }}
+        run: |
+          set -eu
+          echo "publishing $PACKAGE $TAG"
+          curl -sS --fail-with-body -m 30 -u "$REGISTRY_USER:$REGISTRY_TOKEN" -X POST "$COMPOSER_REGISTRY/_satis/rebuild"
+          echo
+          for i in $(seq 1 60); do
+            if curl -fsS -m 30 -u "$REGISTRY_USER:$REGISTRY_TOKEN" "$COMPOSER_REGISTRY/p2/$PACKAGE.json" |
+                 jq -e --arg p "$PACKAGE" --arg v "$TAG" '.packages[$p] | map(.version) | index($v) != null' >/dev/null 2>&1; then
+              echo "$PACKAGE $TAG is in the repository"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "$PACKAGE $TAG was not listed after 5 minutes" >&2
+          exit 1

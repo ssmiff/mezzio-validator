@@ -204,7 +204,7 @@ protected function rules(): array
 | `fallback_value` | none | For an optional field: the value `map()` receives when the field is missing, `null` or `''`. |
 | `filters` | `[]` | A list of `['name' => FilterClass::class, 'options' => [...]]`. They transform the value before it is validated. |
 | `validators` | `[]` | A list of `['name' => ValidatorClass::class, 'options' => [...]]`. All of them run, and every failure is reported. |
-| `type` | `Input` | `Laminas\InputFilter\FileInput` for an uploaded file (see [Uploaded files](#uploaded-files)). |
+| `type` | `Input` | `FileInput` for an uploaded file (see [Uploaded files](#uploaded-files)), or `InputFilter`, `OptionalInputFilter` or `CollectionInputFilter` for nested data (see [Nested objects and lists](#nested-objects-and-lists)). |
 
 Filters come from [laminas-filter](https://docs.laminas.dev/laminas-filter/) and validators from
 [laminas-validator](https://docs.laminas.dev/laminas-validator/). Any filter or validator registered in their plugin managers can
@@ -263,6 +263,83 @@ validator's options:
 
 Putting `NotEmpty` first is also how you replace the generic `__inputEmptyValueFailure` message of a required field with your own.
 
+### Nested objects and lists
+
+A field can hold an object or a list of objects. Give it an input filter `type`, and write its fields with the same keys as at the
+top level. Nested filters can be nested again, to any depth.
+
+```php
+use Laminas\InputFilter\CollectionInputFilter;
+use Laminas\InputFilter\InputFilter;
+use Laminas\InputFilter\OptionalInputFilter;
+
+protected function rules(): array
+{
+    return [
+        // An object that must be sent: {"address": {"street": "...", "zip": "...", "geo": {"lat": "..."}}}
+        'address' => [
+            'type'   => InputFilter::class,
+            'street' => ['required' => true, 'filters' => [['name' => StringTrim::class]]],
+            'zip'    => ['required' => true, 'validators' => [['name' => Digits::class]]],
+            'geo'    => ['type' => InputFilter::class, 'lat' => ['required' => true]],
+        ],
+
+        // An object that may be left out entirely, but is validated in full when it is sent.
+        'billing' => [
+            'type' => OptionalInputFilter::class,
+            'zip'  => ['required' => true, 'validators' => [['name' => Digits::class]]],
+        ],
+
+        // A list of objects: {"items": [{"sku": "A", "qty": "2"}, ...]}
+        'items'   => [
+            'type'         => CollectionInputFilter::class,
+            'required'     => true,             // reject a missing or empty list
+            'input_filter' => [
+                'sku' => ['required' => true],
+                'qty' => ['required' => true, 'validators' => [['name' => Digits::class]]],
+            ],
+        ],
+    ];
+}
+```
+
+| Type | Use it for | When not sent, `map()` receives |
+| --- | --- | --- |
+| `InputFilter` | an object that must be sent | never: its required fields fail |
+| `OptionalInputFilter` | an object that may be left out, but must be complete when sent | `[]` |
+| `CollectionInputFilter` | a list of objects, each checked with `input_filter`; `'count' => n` requires at least `n` items | `[]` if `'required' => false`, otherwise a failure |
+
+As at the top level, `map()` receives only the fields that have a rule, at every depth: unknown keys inside `address` or inside an
+item are dropped. Values are arrays, so convert them into nested DTOs in `map()`:
+
+```php
+protected function map(array $values): CreateOrder
+{
+    $address = (array) $values['address'];
+
+    return new CreateOrder(
+        new Address((string) $address['street'], (string) $address['zip']),
+        array_map(
+            static fn(array $item): OrderItem => new OrderItem((string) $item['sku'], (int) $item['qty']),
+            (array) $values['items'],
+        ),
+    );
+}
+```
+
+Failures are nested the same way, and include only the fields that failed. Collection items are keyed by their index, so the client
+can tell which item was wrong:
+
+```json
+{"errors": {
+    "address": {"zip": {"notDigits": "The input must contain only digits"}},
+    "items":   {"2": {"sku": {"__inputEmptyValueFailure": "The value for \"sku\" was empty, ..."}}}
+}}
+```
+
+A required `CollectionInputFilter` that is missing, empty or not a list fails with its item fields' messages under index `0`. Check
+`errors.items` rather than a particular item if you only need to know that the list was rejected.
+
 ## Mapping values with `map()`
 
 `map()` is where the untyped request becomes your typed object. It runs only after **every** rule has passed.
@@ -287,6 +364,7 @@ sent that have no rule are not in it, so a client can never smuggle extra fields
 | sent `null` to an optional field | `null`, or the `fallback_value` |
 | did not send an optional field | `null`, or the `fallback_value` |
 | sent a field that has no rule | not present at all |
+| sent a nested object or list | an array of its own filtered fields (see [Nested objects and lists](#nested-objects-and-lists)) |
 
 A required field is never missing, `null` or empty in `map()`, because validation would already have failed. The exception is
 `allow_empty`, which lets it through as `''` or `null`.
@@ -664,9 +742,12 @@ Two differences matter in practice:
 
 ## Limitations
 
-- **Fields are flat and scalar.** Nested input filters (`'type' => InputFilter::class`) and `ArrayInput` do not work through `rules()`
-  yet. For a list or nested object, give the field no validators of its own (`'required' => false` or `true`), then check its
-  contents in `map()` and throw `ValidationFailed` with keys such as `'items.0.sku'`.
+- **Lists of plain values.** laminas-inputfilter's `ArrayInput`, meant for a list like `["a", "b"]`, currently passes the whole array
+  to each validator and lets a non-array through. Until that is fixed upstream, give the field no rules of its own
+  (`'required' => true` or `false`), then check its items in `map()` and throw `ValidationFailed` keyed by index. A list of
+  **objects** works, with `CollectionInputFilter`.
+- **`error_message` and `break_on_failure`** on an input have no visible effect. Use each validator's `messages` option and
+  `break_chain_on_failure` instead (see [Custom messages](#custom-messages)).
 - **A JSON body needs `BodyParamsMiddleware`.** Without it, the parsed body is empty and only the query string is used.
 
 ## Reference

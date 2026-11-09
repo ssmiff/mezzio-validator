@@ -62,7 +62,3 @@ protected function data(ServerRequestInterface $request): array
     return [...parent::data($request), 'id' => $request->getAttribute('id')];
 }
 ```
-
-## Upgrading from 0.1
-
-Add `'name'` to every input spec, and pass `Laminas\InputFilter\Factory` (not `InputFilterPluginManager`) to `parent::__construct()`.

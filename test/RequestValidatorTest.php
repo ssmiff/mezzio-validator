@@ -16,6 +16,8 @@ use Ssmiff\MezzioValidator\RequestValidator;
 use Ssmiff\MezzioValidator\Test\Fixture\CreateUser;
 use Ssmiff\MezzioValidator\Test\Fixture\CreateUserHandler;
 use Ssmiff\MezzioValidator\Test\Fixture\CreateUserValidator;
+use Ssmiff\MezzioValidator\Test\Fixture\RenameUser;
+use Ssmiff\MezzioValidator\Test\Fixture\RenameUserValidator;
 
 use function array_replace_recursive;
 
@@ -52,6 +54,55 @@ final class RequestValidatorTest extends TestCase
         $request = new ServerRequest()->withQueryParams(['email' => 'a@example.com', 'name' => 'Ann']);
 
         self::assertSame('Ann', $this->validator()->validate($request)->name);
+    }
+
+    public function testReadsTheQueryStringWhenTheParsedBodyIsEmpty(): void
+    {
+        // A real GET request: Diactoros fills the parsed body from $_POST, so it is [] rather than null.
+        $request = new ServerRequest(method: 'GET')
+            ->withParsedBody([])
+            ->withQueryParams(['email' => 'a@example.com', 'name' => 'Ann']);
+
+        self::assertSame('Ann', $this->validator()->validate($request)->name);
+    }
+
+    public function testMergesTheQueryStringAndTheParsedBody(): void
+    {
+        $request = new ServerRequest()
+            ->withQueryParams(['email' => 'a@example.com', 'age' => '7'])
+            ->withParsedBody(['name' => 'Ann']);
+
+        self::assertEquals(new CreateUser('a@example.com', 'Ann', 7), $this->validator()->validate($request));
+    }
+
+    public function testTheParsedBodyWinsOverTheQueryString(): void
+    {
+        $request = new ServerRequest()
+            ->withQueryParams(['email' => 'query@example.com', 'name' => 'Query'])
+            ->withParsedBody(['email' => 'body@example.com', 'name' => 'Body']);
+
+        $user = $this->validator()->validate($request);
+
+        self::assertSame('body@example.com', $user->email);
+        self::assertSame('Body', $user->name);
+    }
+
+    public function testAnObjectParsedBodyContributesNothing(): void
+    {
+        $request = new ServerRequest()
+            ->withQueryParams(['email' => 'a@example.com', 'name' => 'Ann'])
+            ->withParsedBody((object) ['name' => 'Ignored']);
+
+        self::assertSame('Ann', $this->validator()->validate($request)->name);
+    }
+
+    public function testDataCanBeOverriddenToAddRouteParameters(): void
+    {
+        $validator = Services::get($this->container(), RenameUserValidator::class);
+
+        $request = new ServerRequest()->withAttribute('id', '12')->withParsedBody(['name' => 'Ann', 'id' => '99']);
+
+        self::assertEquals(new RenameUser(12, 'Ann'), $validator->validate($request));
     }
 
     public function testEachValidationStartsFromAFreshFilter(): void

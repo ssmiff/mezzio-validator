@@ -11,6 +11,7 @@ use Psr\Http\Message\ServerRequestInterface;
 use Ssmiff\MezzioValidator\Exception\ValidationFailed;
 
 use function array_filter;
+use function array_replace;
 use function is_array;
 
 /**
@@ -53,7 +54,10 @@ abstract class AbstractRequestValidator implements RequestValidator
     }
 
     /**
-     * The parsed body, or the query string when the request has none.
+     * The data the rules run against: the query string merged with the parsed body, the body winning when both
+     * have the same key. A parsed body that is not an array (null, or an object) contributes nothing.
+     *
+     * Override it to read other sources, such as route parameters (request attributes) or uploaded files.
      *
      * @return array<array-key, mixed>
      */
@@ -61,6 +65,6 @@ abstract class AbstractRequestValidator implements RequestValidator
     {
         $body = $request->getParsedBody();
 
-        return is_array($body) ? $body : $request->getQueryParams();
+        return array_replace($request->getQueryParams(), is_array($body) ? $body : []);
     }
 }

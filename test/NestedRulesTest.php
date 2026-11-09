@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace Ssmiff\MezzioValidator\Test;
 
 use Laminas\Diactoros\ServerRequest;
-use Laminas\InputFilter\InputFilterPluginManager;
+use Laminas\InputFilter\Factory;
 use Laminas\ServiceManager\ServiceManager;
 use Override;
 use PHPUnit\Framework\TestCase;
@@ -39,7 +39,7 @@ final class NestedRulesTest extends TestCase
         /** @psalm-suppress MixedArgumentTypeCoercion the merged provider config is a plain dependencies array */
         $container = new ServiceManager($dependencies);
 
-        $this->validator = new CreateOrderValidator($container->get(InputFilterPluginManager::class));
+        $this->validator = new CreateOrderValidator($container->get(Factory::class));
     }
 
     public function testMapsNestedFiltersAndCollectionsDroppingUnknownKeysAtEveryLevel(): void

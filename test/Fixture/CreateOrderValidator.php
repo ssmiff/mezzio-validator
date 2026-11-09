@@ -21,20 +21,20 @@ final class CreateOrderValidator extends AbstractRequestValidator
         return [
             'address' => [
                 'type'   => InputFilter::class,
-                'street' => ['required' => true, 'filters' => [['name' => StringTrim::class]]],
-                'zip'    => ['required' => true, 'validators' => [['name' => Digits::class]]],
-                'geo'    => ['type' => InputFilter::class, 'lat' => ['required' => true]],
+                'street' => ['name' => 'street', 'required' => true, 'filters' => [['name' => StringTrim::class]]],
+                'zip'    => ['name' => 'zip', 'required' => true, 'validators' => [['name' => Digits::class]]],
+                'geo'    => ['type' => InputFilter::class, 'lat' => ['name' => 'lat', 'required' => true]],
             ],
             'billing' => [
                 'type' => OptionalInputFilter::class,
-                'zip'  => ['required' => true, 'validators' => [['name' => Digits::class]]],
+                'zip'  => ['name' => 'zip', 'required' => true, 'validators' => [['name' => Digits::class]]],
             ],
             'items'   => [
                 'type'         => CollectionInputFilter::class,
                 'required'     => true,
                 'input_filter' => [
-                    'sku' => ['required' => true],
-                    'qty' => ['required' => true, 'validators' => [['name' => Digits::class]]],
+                    'sku' => ['name' => 'sku', 'required' => true],
+                    'qty' => ['name' => 'qty', 'required' => true, 'validators' => [['name' => Digits::class]]],
                 ],
             ],
         ];

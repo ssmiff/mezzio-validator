@@ -20,8 +20,8 @@ final class RenameUserValidator extends AbstractRequestValidator
     protected function rules(): array
     {
         return [
-            'id'   => ['required' => true, 'filters' => [['name' => ToInt::class]]],
-            'name' => ['required' => true],
+            'id'   => ['name' => 'id', 'required' => true, 'filters' => [['name' => ToInt::class]]],
+            'name' => ['name' => 'name', 'required' => true],
         ];
     }
 

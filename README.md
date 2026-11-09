@@ -1,34 +1,15 @@
 # ssmiff/mezzio-validator
 
-Request validation for [Mezzio](https://docs.mezzio.dev/), built on [laminas-inputfilter](https://docs.laminas.dev/laminas-inputfilter/).
+Request validation for [Mezzio](https://docs.mezzio.dev/), as a thin layer over
+[laminas-inputfilter](https://docs.laminas.dev/laminas-inputfilter/).
 
-You write one small class per request. It declares the **rules** for each field and **maps** the clean values onto an object of
-your own, usually a readonly DTO. Your handler asks for that validator, calls `validate($request)`, and gets back either a fully
-typed object or a `ValidationFailed` exception that a middleware turns into a `422` JSON response.
+You write one class per request: its `rules()` are a laminas input filter specification, and its `map()` turns the filtered values
+into your own object. A handler gets the validator injected with `#[UseValidator]`, calls `validate($request)`, and receives that
+object or a `ValidationFailed` exception, which a middleware turns into a `422` JSON response.
 
-```php
-$note = $this->validator->validate($request); // a CreateNote, or a 422 for the client
-```
-
-If you have used Laravel, it is the same idea as a `FormRequest`: `rules()` are the rules, `data()` is `validationData()`, and
-`map()` is what you would do with `validated()`. See [Coming from Laravel](#coming-from-laravel).
+All filtering and validation is laminas-inputfilter's. This package only connects it to PSR-7 requests, your DTOs and the container.
 
 Requires PHP 8.5. Licensed under the [MIT licence](LICENSE).
-
-- [Install](#install)
-- [Quick start](#quick-start)
-- [How a request is validated](#how-a-request-is-validated)
-- [Writing rules](#writing-rules)
-- [Mapping values with `map()`](#mapping-values-with-map)
-- [Where the data comes from: `data()`](#where-the-data-comes-from-data)
-- [Injecting a validator](#injecting-a-validator)
-- [Error responses](#error-responses)
-- [Validators with dependencies](#validators-with-dependencies)
-- [Testing a validator](#testing-a-validator)
-- [Coming from Laravel](#coming-from-laravel)
-- [Limitations](#limitations)
-- [Reference](#reference)
-- [Development](#development)
 
 ## Install
 
@@ -36,37 +17,18 @@ Requires PHP 8.5. Licensed under the [MIT licence](LICENSE).
 composer require ssmiff/mezzio-validator
 ```
 
-`laminas-component-installer` registers `Ssmiff\MezzioValidator\ConfigProvider` for you, along with the providers of the packages it
-depends on: `laminas-filter`, `laminas-validator` and `laminas-inputfilter`.
-
-This package also depends on [ssmiff/mezzio-container-helpers](https://github.com/ssmiff/mezzio-container-helpers), which provides
-`#[UseValidator]`'s plumbing (`AttributeFactory`). Its `ConfigProvider` must be registered too; the component installer does that as well.
-Without the installer, add all of them to `config/config.php` yourself.
+`laminas-component-installer` registers `Ssmiff\MezzioValidator\ConfigProvider` and the providers it depends on: `laminas-filter`,
+`laminas-validator`, `laminas-inputfilter` and [ssmiff/mezzio-container-helpers](https://github.com/ssmiff/mezzio-container-helpers).
+Without the installer, add them to `config/config.php` yourself.
 
 ## Quick start
 
-Three pieces: a DTO, a validator, and a handler that uses it.
-
-**1. The DTO** is whatever you want your handler to receive. Nothing in it is specific to this package.
-
-```php
-final readonly class CreateUser
-{
-    public function __construct(
-        public string $email,
-        public string $name,
-        public ?int $age,
-    ) {}
-}
-```
-
-**2. The validator** extends `AbstractRequestValidator`, names the DTO in `@extends`, and implements two methods:
+**A validator** extends `AbstractRequestValidator`, names the object it returns in `@extends`, and implements `rules()` and `map()`:
 
 ```php
 use Laminas\Filter\StringTrim;
 use Laminas\Validator\Digits;
 use Laminas\Validator\EmailAddress;
-use Laminas\Validator\StringLength;
 use Ssmiff\MezzioValidator\AbstractRequestValidator;
 
 /** @extends AbstractRequestValidator<CreateUser> */
@@ -76,18 +38,15 @@ final class CreateUserValidator extends AbstractRequestValidator
     {
         return [
             'email' => [
+                'name'       => 'email',
                 'required'   => true,
                 'filters'    => [['name' => StringTrim::class]],
                 'validators' => [['name' => EmailAddress::class]],
             ],
-            'name'  => [
-                'required'   => true,
-                'filters'    => [['name' => StringTrim::class]],
-                'validators' => [['name' => StringLength::class, 'options' => ['min' => 2, 'max' => 100]]],
-            ],
             'age'   => [
+                'name'       => 'age',
                 'required'   => false,
-                'validators' => [['name' => Digits::class]],   // '42' passes, 'abc' and '4.2' fail
+                'validators' => [['name' => Digits::class]],
             ],
         ];
     }
@@ -95,17 +54,14 @@ final class CreateUserValidator extends AbstractRequestValidator
     protected function map(array $values): CreateUser
     {
         return new CreateUser(
-            email: (string) $values['email'],
-            name:  (string) $values['name'],
-            age:   $values['age'] === null || $values['age'] === '' ? null : (int) $values['age'],
+            (string) $values['email'],
+            $values['age'] === null || $values['age'] === '' ? null : (int) $values['age'],
         );
     }
 }
 ```
 
-There is nothing to register: every concrete validator is built automatically (see [Validators with dependencies](#validators-with-dependencies)).
-
-**3. The handler** asks for the validator with `#[UseValidator]` and is built by `AttributeFactory`:
+**A handler** asks for it by class and is built by `AttributeFactory`:
 
 ```php
 use Ssmiff\MezzioValidator\Attribute\UseValidator;
@@ -116,326 +72,75 @@ final readonly class CreateUserHandler implements RequestHandlerInterface
     /** @param RequestValidator<CreateUser> $validator */
     public function __construct(
         #[UseValidator(CreateUserValidator::class)] private RequestValidator $validator,
-        private UserRepository $users,
     ) {}
 
     public function handle(ServerRequestInterface $request): ResponseInterface
     {
-        $user = $this->validator->validate($request); // CreateUser, fully typed
+        $user = $this->validator->validate($request); // a CreateUser
 
-        $this->users->add($user);
-
-        return new JsonResponse(['email' => $user->email], 201);
+        // ...
     }
 }
 ```
 
 ```php
-// config/autoload/dependencies.global.php
 'dependencies' => ['factories' => [CreateUserHandler::class => AttributeFactory::class]],
 ```
 
-**4. Turn failures into `422` responses** by piping the middleware once, in `config/pipeline.php`:
+**The middleware** turns failures into `422` responses. Pipe it once, before routing, in `config/pipeline.php`:
 
 ```php
-$app->pipe(ServerUrlMiddleware::class);
 $app->pipe(\Ssmiff\MezzioValidator\Http\ValidationFailedMiddleware::class);
 ```
 
-A bad request now gets:
+Validators need no registration: every concrete `RequestValidator` is built automatically.
 
-```http
-HTTP/1.1 422 Unprocessable Entity
-Content-Type: application/json
+## `rules()`
 
-{"errors":{"email":{"emailAddressInvalidFormat":"The input is not a valid email address. Use the basic format local-part@hostname"}}}
-```
+Return an input filter specification exactly as laminas-inputfilter's `Factory::createInputFilter()` accepts it. Nothing is added or
+translated, so everything in the [laminas-inputfilter documentation](https://docs.laminas.dev/laminas-inputfilter/) applies as written:
+input specs and their keys, filters and validators, nested `InputFilter` and `OptionalInputFilter`, `CollectionInputFilter`,
+`FileInput`, and custom messages.
 
-## How a request is validated
-
-`validate(ServerRequestInterface $request)` does the same five steps every time:
-
-1. **Build a fresh input filter.** A new `Laminas\InputFilter\InputFilter` comes from the `InputFilterPluginManager` on every call, so
-   one validator instance can be shared safely and nothing leaks from one request to the next.
-2. **Add your rules.** Each entry of `rules()` is added as an input named after its key.
-3. **Collect the data** by calling `data($request)`. By default this is the query string merged with the parsed body
-   (see [`data()`](#where-the-data-comes-from-data)).
-4. **Filter and validate.** laminas-inputfilter runs each field's filters, then its validators. Fields without a rule are ignored.
-5. **Fail or map.**
-   - If any field failed, it throws `ValidationFailed` with the messages of **every** failing field, not just the first.
-   - Otherwise it passes the filtered values to `map()` and returns whatever `map()` returns.
-
-`validate()` is `final`. You customise it through three `protected` methods:
-
-| Method | Required? | What you use it for |
-| --- | --- | --- |
-| `rules(): array` | yes | Which fields exist, how they are cleaned and what makes them valid. |
-| `map(array $values): object` | yes | Turning the clean values into your own object. Also the place for checks across fields. |
-| `data(ServerRequestInterface $request): array` | no | Choosing where the values come from: query string, body, route parameters, uploaded files, headers... |
-
-## Writing rules
-
-`rules()` returns an array keyed by field name. Each value is a
-[laminas-inputfilter input specification](https://docs.laminas.dev/laminas-inputfilter/specs/) without the `name` key; the key of the
-array is used as the name.
+As laminas requires, every input spec has a `name`, nested ones included. A nested input filter is keyed by its field name:
 
 ```php
-protected function rules(): array
-{
-    return [
-        'field' => [
-            'required'    => true,              // must be present and non-empty (default: true)
-            'allow_empty' => false,             // let '' through for a required field
-            'fallback_value' => null,           // value used when an optional field is missing or empty
-            'filters'     => [/* run first, in order */],
-            'validators'  => [/* run on the filtered value, in order */],
-        ],
-    ];
-}
-```
-
-### The keys you will use
-
-| Key | Default | Meaning |
-| --- | --- | --- |
-| `required` | `true` | The field must be present and not empty. A missing or empty required field fails with `__inputEmptyValueFailure`. |
-| `allow_empty` | `false` | Lets a required field be empty: `''` passes as `''`, and `null` or a missing field pass as `null`. In practice, this makes the field optional. |
-| `continue_if_empty` | `false` | Runs the validators even when the value is empty, for validators that decide for themselves what empty means. |
-| `fallback_value` | none | For an optional field: the value `map()` receives when the field is missing, `null` or `''`. |
-| `filters` | `[]` | A list of `['name' => FilterClass::class, 'options' => [...]]`. They transform the value before it is validated. |
-| `validators` | `[]` | A list of `['name' => ValidatorClass::class, 'options' => [...]]`. All of them run, and every failure is reported. |
-| `type` | `Input` | `FileInput` for an uploaded file (see [Uploaded files](#uploaded-files)), or `InputFilter`, `OptionalInputFilter` or `CollectionInputFilter` for nested data (see [Nested objects and lists](#nested-objects-and-lists)). |
-
-Filters come from [laminas-filter](https://docs.laminas.dev/laminas-filter/) and validators from
-[laminas-validator](https://docs.laminas.dev/laminas-validator/). Any filter or validator registered in their plugin managers can
-be used by class name, including your own.
-
-### Filters run before validators
-
-This is the part that surprises people. Validators see the value **after** the filters, so a converting filter can hide bad input
-from them. `ToInt` turns `'abc'` into `0`, and `Digits` then happily accepts `0`:
-
-```php
-// Accepts 'abc' as an age of 0.
-'age' => ['filters' => [['name' => ToInt::class]], 'validators' => [['name' => Digits::class]]],
-
-// Rejects 'abc'; map() does the conversion.
-'age' => ['validators' => [['name' => Digits::class]]],
-```
-
-Use filters to **clean** input (`StringTrim`, `StringToLower`, `StripTags`, ...) and validators to **check** it, and convert to `int`,
-`float`, `bool` or dates in `map()` once the raw value has been checked.
-
-### Stopping a chain early
-
-By default every validator of a field runs and every failure is reported. To stop at the first failure, for example so a non-numeric
-value does not also get a "too short" message, set `break_chain_on_failure` on that validator:
-
-```php
-'code' => [
-    'validators' => [
-        ['name' => Digits::class, 'break_chain_on_failure' => true],
-        ['name' => StringLength::class, 'options' => ['min' => 5]],
-    ],
+'address' => [
+    'type'   => InputFilter::class,
+    'street' => ['name' => 'street', 'required' => true],
+    'zip'    => ['name' => 'zip', 'required' => true, 'validators' => [['name' => Digits::class]]],
 ],
 ```
 
-### Custom messages
+A new input filter is built from `rules()` on every call, so one validator instance can be shared and keeps no state between requests.
 
-Every laminas validator accepts a `messages` option, keyed by its failure code. `%min%`, `%max%` and the like are replaced with the
-validator's options:
+## `map()`
+
+`map()` runs only after every rule has passed. It receives laminas' filtered values: **one key per input in `rules()`**, at every
+level, and nothing else, so fields the client sent without a rule never reach it.
+
+Values are `mixed`; cast or narrow them as you build your object. An optional input the client did not send is `null` (or its
+`fallback_value`), and an empty one is `''`, so handle both before casting:
 
 ```php
-'title' => [
-    'validators' => [
-        [
-            'name'                   => NotEmpty::class,
-            'break_chain_on_failure' => true,
-            'options'                => ['messages' => [NotEmpty::IS_EMPTY => 'Give it a title.']],
-        ],
-        [
-            'name'    => StringLength::class,
-            'options' => ['min' => 3, 'messages' => [StringLength::TOO_SHORT => 'At least %min% characters.']],
-        ],
-    ],
-],
+$values['age'] === null || $values['age'] === '' ? null : (int) $values['age']
 ```
 
-Putting `NotEmpty` first is also how you replace the generic `__inputEmptyValueFailure` message of a required field with your own.
-
-### Nested objects and lists
-
-A field can hold an object or a list of objects. Give it an input filter `type`, and write its fields with the same keys as at the
-top level. Nested filters can be nested again, to any depth.
+Checks that need more than one field belong here. Throw `ValidationFailed` yourself, keyed by field and failure code, and the client
+gets the same `422` as for a rule:
 
 ```php
-use Laminas\InputFilter\CollectionInputFilter;
-use Laminas\InputFilter\InputFilter;
-use Laminas\InputFilter\OptionalInputFilter;
-
-protected function rules(): array
-{
-    return [
-        // An object that must be sent: {"address": {"street": "...", "zip": "...", "geo": {"lat": "..."}}}
-        'address' => [
-            'type'   => InputFilter::class,
-            'street' => ['required' => true, 'filters' => [['name' => StringTrim::class]]],
-            'zip'    => ['required' => true, 'validators' => [['name' => Digits::class]]],
-            'geo'    => ['type' => InputFilter::class, 'lat' => ['required' => true]],
-        ],
-
-        // An object that may be left out entirely, but is validated in full when it is sent.
-        'billing' => [
-            'type' => OptionalInputFilter::class,
-            'zip'  => ['required' => true, 'validators' => [['name' => Digits::class]]],
-        ],
-
-        // A list of objects: {"items": [{"sku": "A", "qty": "2"}, ...]}
-        'items'   => [
-            'type'         => CollectionInputFilter::class,
-            'required'     => true,             // reject a missing or empty list
-            'input_filter' => [
-                'sku' => ['required' => true],
-                'qty' => ['required' => true, 'validators' => [['name' => Digits::class]]],
-            ],
-        ],
-    ];
+if ($values['password'] !== $values['password_confirmation']) {
+    throw new ValidationFailed(['password_confirmation' => ['notSame' => 'The passwords do not match.']]);
 }
 ```
 
-| Type | Use it for | When not sent, `map()` receives |
-| --- | --- | --- |
-| `InputFilter` | an object that must be sent | never: its required fields fail |
-| `OptionalInputFilter` | an object that may be left out, but must be complete when sent | `[]` |
-| `CollectionInputFilter` | a list of objects, each checked with `input_filter`; `'count' => n` requires at least `n` items | `[]` if `'required' => false`, otherwise a failure |
+Any other exception passes through untouched.
 
-As at the top level, `map()` receives only the fields that have a rule, at every depth: unknown keys inside `address` or inside an
-item are dropped. Values are arrays, so convert them into nested DTOs in `map()`:
+## `data()`
 
-```php
-protected function map(array $values): CreateOrder
-{
-    $address = (array) $values['address'];
-
-    return new CreateOrder(
-        new Address((string) $address['street'], (string) $address['zip']),
-        array_map(
-            static fn(array $item): OrderItem => new OrderItem((string) $item['sku'], (int) $item['qty']),
-            (array) $values['items'],
-        ),
-    );
-}
-```
-
-Failures are nested the same way, and include only the fields that failed. Collection items are keyed by their index, so the client
-can tell which item was wrong:
-
-```json
-{"errors": {
-    "address": {"zip": {"notDigits": "The input must contain only digits"}},
-    "items":   {"2": {"sku": {"__inputEmptyValueFailure": "The value for \"sku\" was empty, ..."}}}
-}}
-```
-
-A required `CollectionInputFilter` that is missing, empty or not a list fails with its item fields' messages under index `0`. Check
-`errors.items` rather than a particular item if you only need to know that the list was rejected.
-
-## Mapping values with `map()`
-
-`map()` is where the untyped request becomes your typed object. It runs only after **every** rule has passed.
-
-```php
-/**
- * @param array<array-key, mixed> $values the filtered values of every field that has a rule
- * @return T
- */
-abstract protected function map(array $values): object;
-```
-
-### What `$values` contains
-
-`$values` has **exactly one key per entry in `rules()`**, every time, whether or not the client sent that field. Fields the client
-sent that have no rule are not in it, so a client can never smuggle extra fields into your object.
-
-| The client... | `$values['field']` is |
-| --- | --- |
-| sent a value | the value **after** the field's filters |
-| sent `''` to an optional field | `''` (after filters), or the `fallback_value` if it has one |
-| sent `null` to an optional field | `null`, or the `fallback_value` |
-| did not send an optional field | `null`, or the `fallback_value` |
-| sent a field that has no rule | not present at all |
-| sent a nested object or list | an array of its own filtered fields (see [Nested objects and lists](#nested-objects-and-lists)) |
-
-A required field is never missing, `null` or empty in `map()`, because validation would already have failed. The exception is
-`allow_empty`, which lets it through as `''` or `null`.
-
-### Typing values
-
-The values are `mixed` as far as PHP and Psalm know: the request is untrusted, and only your rules say what is in it. Cast or narrow
-each one as you build your object. Your rules have already guaranteed the cast is safe:
-
-```php
-protected function map(array $values): CreateUser
-{
-    return new CreateUser(
-        email: (string) $values['email'],                                   // required: always a string
-        name:  (string) $values['name'],
-        age:   $values['age'] === null || $values['age'] === '' ? null : (int) $values['age'], // optional
-    );
-}
-```
-
-**Optional fields can always be `null`, or `''` when the client sends an empty value.** Passing `$values['age']` straight into an `int`
-parameter works in your tests and then throws a `TypeError` on the first request without `age`. Either handle both in `map()` and
-accept `?int` in your DTO, or give the field a `fallback_value`, which replaces both `null` and `''`.
-
-Narrow the return type to your DTO (`map(array $values): CreateUser`) and put it in the class's `@extends` tag, so callers of
-`validate()` get `CreateUser` and not `object`.
-
-### Checks across fields
-
-`rules()` checks one field at a time. Anything that needs two or more fields, such as "the end date is after the start date" or
-"the passwords match", belongs in `map()`. Throw `ValidationFailed` yourself, keyed by field and failure code like any other error,
-and the client gets the same `422` response:
-
-```php
-protected function map(array $values): ChangePassword
-{
-    if ($values['password'] !== $values['password_confirmation']) {
-        throw new ValidationFailed([
-            'password_confirmation' => ['notSame' => 'The passwords do not match.'],
-        ]);
-    }
-
-    return new ChangePassword((string) $values['password']);
-}
-```
-
-```json
-{"errors":{"password_confirmation":{"notSame":"The passwords do not match."}}}
-```
-
-Any other exception thrown from `map()` passes through untouched, so a bug in `map()` is still a `500`, not a `422`.
-
-### Building more than a DTO
-
-`map()` can return any object: a command for a bus, a value object, an entity you build from scratch... Keep it free of side effects,
-though: no saving, no sending. It is about turning input into an object, and the handler decides what to do with that object.
-
-## Where the data comes from: `data()`
-
-### The default
-
-`data()` returns the **query string merged with the parsed body**, and **the body wins** when both have the same key:
-
-```php
-protected function data(ServerRequestInterface $request): array
-{
-    $body = $request->getParsedBody();
-
-    return array_replace($request->getQueryParams(), is_array($body) ? $body : []);
-}
-```
+`data()` returns the array the rules run against. By default it is the **query string merged with the parsed body**, the body
+winning when both have the same key, like Laravel's `validationData()`. A parsed body that is not an array contributes nothing.
 
 | Request | Data |
 | --- | --- |
@@ -444,323 +149,103 @@ protected function data(ServerRequestInterface $request): array
 | `POST /users?draft=1` with body `{"name": "Ann"}` | `['draft' => '1', 'name' => 'Ann']` |
 | `POST /users?name=Query` with body `{"name": "Body"}` | `['name' => 'Body']` |
 
-This works for every method without configuration. Mezzio gives a `GET` request an empty array as its parsed body (Diactoros copies
-`$_POST`), so the query string fills it. A JSON body is parsed only once
-[`BodyParamsMiddleware`](https://docs.mezzio.dev/mezzio/v3/features/helpers/body-parse/) is in your pipeline; without it, a JSON
-request's parsed body is empty and only the query string is validated. A parsed body that is an object rather than an array is ignored.
+A JSON body is parsed only when [`BodyParamsMiddleware`](https://docs.mezzio.dev/mezzio/v3/features/helpers/body-parse/) is in
+your pipeline.
 
-The merge is shallow: a key in the body replaces the same key from the query string completely, even when both are arrays.
-
-### Overriding it
-
-`data()` is `protected` and not `final`. Override it in any validator that needs different data. Start from `parent::data($request)`
-when you want to keep the default and add to it.
-
-**Route parameters.** Mezzio's router stores route parameters as request attributes, so `PATCH /users/{id}` can validate `id` like any
-other field. Put it **last**, so a body field of the same name cannot override the URL:
+Override `data()` to use other parts of the request. Build on `parent::data($request)` to keep the default:
 
 ```php
+// Route parameters are request attributes. Add them last so the body cannot override the URL.
 protected function data(ServerRequestInterface $request): array
 {
     return [...parent::data($request), 'id' => $request->getAttribute('id')];
 }
 ```
 
-Ask for attributes by name. `getAttributes()` also returns everything your middleware stored on the request, such as the
-`RouteResult`, the authenticated user or the tenant.
-
-**Query string only**, so a body can never affect a search:
+```php
+// Uploaded files, for FileInput inputs. map() receives the UploadedFileInterface.
+protected function data(ServerRequestInterface $request): array
+{
+    return [...parent::data($request), ...$request->getUploadedFiles()];
+}
+```
 
 ```php
+// Only the query string, so a body can never affect it.
 protected function data(ServerRequestInterface $request): array
 {
     return $request->getQueryParams();
 }
 ```
 
-**Body only**, ignoring the query string (the behaviour of many APIs for `POST`, `PUT` and `PATCH`):
+Whatever `data()` returns still goes through `rules()`, so adding a source never lets unexpected fields through to `map()`.
 
-```php
-protected function data(ServerRequestInterface $request): array
-{
-    $body = $request->getParsedBody();
+## Errors
 
-    return is_array($body) ? $body : [];
-}
-```
-
-**Headers or other request details**, as plain fields:
-
-```php
-protected function data(ServerRequestInterface $request): array
-{
-    return [...parent::data($request), 'idempotency_key' => $request->getHeaderLine('Idempotency-Key')];
-}
-```
-
-**Different sources per method**, if a single validator serves several routes:
-
-```php
-protected function data(ServerRequestInterface $request): array
-{
-    return match ($request->getMethod()) {
-        'GET', 'HEAD', 'DELETE' => $request->getQueryParams(),
-        default                 => parent::data($request),
-    };
-}
-```
-
-Whatever `data()` returns is only the input: it still goes through `rules()`, and only fields with a rule reach `map()`. Adding a source
-to `data()` therefore never lets unexpected fields through.
-
-### Uploaded files
-
-PSR-7 keeps uploaded files apart from the body, in `getUploadedFiles()`. Merge them in and give the field a `FileInput`; `map()` then
-receives the `Psr\Http\Message\UploadedFileInterface`:
-
-```php
-use Laminas\InputFilter\FileInput;
-use Laminas\Validator\File\UploadFile;
-
-protected function rules(): array
-{
-    return [
-        'name'   => ['required' => true],
-        'avatar' => ['type' => FileInput::class, 'required' => true, 'validators' => [['name' => UploadFile::class]]],
-    ];
-}
-
-protected function data(ServerRequestInterface $request): array
-{
-    return [...parent::data($request), ...$request->getUploadedFiles()];
-}
-
-protected function map(array $values): UploadAvatar
-{
-    assert($values['avatar'] instanceof UploadedFileInterface);
-
-    return new UploadAvatar((string) $values['name'], $values['avatar']);
-}
-```
-
-`UploadFile` fails when the upload itself failed: too large, partial, missing... laminas-validator's other `File\` validators (`Size`,
-`MimeType`, `Extension`, `IsImage`, ...) add the usual checks.
-
-## Injecting a validator
-
-### With `#[UseValidator]`
-
-`#[UseValidator(SomeValidator::class)]` on a constructor parameter tells `AttributeFactory` (from mezzio-container-helpers) to inject
-that validator. Type the parameter as the `RequestValidator` interface, and add the DTO in a `@param` tag so that `validate()` is typed:
-
-```php
-/** @param RequestValidator<CreateUser> $validator */
-public function __construct(
-    #[UseValidator(CreateUserValidator::class)] private RequestValidator $validator,
-) {}
-```
-
-The class being built (usually a handler) must be built by `AttributeFactory`:
-
-```php
-'dependencies' => ['factories' => [CreateUserHandler::class => AttributeFactory::class]],
-```
-
-Typing against `RequestValidator` rather than `CreateUserValidator` keeps the handler easy to test: any `RequestValidator<CreateUser>`
-will do, including a stub.
-
-### Without the attribute
-
-Every validator is an ordinary container service, so you can also type-hint the concrete class, or fetch it from the container
-in your own factory:
-
-```php
-public function __construct(private CreateUserValidator $validator) {}
-```
-
-```php
-$validator = $container->get(CreateUserValidator::class);
-```
-
-## Error responses
-
-### `ValidationFailed`
-
-`validate()` throws `Ssmiff\MezzioValidator\Exception\ValidationFailed`, a `RuntimeException`. `getMessages()` returns the messages of
-every failing field, keyed by field, then by the validator's failure code. Fields that passed are not included:
+`validate()` throws `Ssmiff\MezzioValidator\Exception\ValidationFailed`. `getMessages()` returns laminas' messages for the inputs
+that failed, keyed by field and then by failure code, nested like the data. Inputs that passed are left out, and collection items
+keep their index:
 
 ```php
 [
-    'email' => ['emailAddressInvalidFormat' => 'The input is not a valid email address. ...'],
-    'name'  => ['stringLengthTooShort' => 'The input is less than 2 characters long'],
+    'email'   => ['emailAddressInvalidFormat' => 'The input is not a valid email address. ...'],
+    'address' => ['zip' => ['notDigits' => 'The input must contain only digits']],
 ]
 ```
 
-The failure codes are stable and safe for a client to switch on. The texts can be changed (see [Custom messages](#custom-messages)).
-
-You can catch it in a handler when a failure should do something other than a `422`, such as re-rendering a form with the messages:
-
-```php
-try {
-    $user = $this->validator->validate($request);
-} catch (ValidationFailed $e) {
-    return new HtmlResponse($this->templates->render('user::create', ['errors' => $e->getMessages()]), 422);
-}
-```
-
-### `ValidationFailedMiddleware`
-
-For an API you rarely need to catch it. Pipe `Ssmiff\MezzioValidator\Http\ValidationFailedMiddleware` once, before routing, and any
-`ValidationFailed` thrown by a later middleware or handler becomes:
-
-- status `422 Unprocessable Entity`
-- header `Content-Type: application/json`
-- body `{"errors": <getMessages()>}`
-
-Every other response and every other exception passes through untouched.
-
-```php
-// config/pipeline.php
-$app->pipe(ErrorHandler::class);
-$app->pipe(ServerUrlMiddleware::class);
-$app->pipe(ValidationFailedMiddleware::class);
-// ... routing, dispatch
-```
-
-It needs a PSR-17 `Psr\Http\Message\ResponseFactoryInterface` in the container, which `laminas-diactoros` provides. To change the
-format, for example to [RFC 9457 problem details](https://www.rfc-editor.org/rfc/rfc9457), write your own middleware that catches
-`ValidationFailed` and pipe it instead.
+`Ssmiff\MezzioValidator\Http\ValidationFailedMiddleware` catches it from any later middleware or handler and responds with `422`,
+`Content-Type: application/json` and `{"errors": <getMessages()>}`. Everything else passes through. It needs a PSR-17
+`ResponseFactoryInterface` in the container, which `laminas-diactoros` provides. For a different format, catch `ValidationFailed` in a
+middleware of your own instead.
 
 ## Validators with dependencies
 
-Every concrete class implementing `RequestValidator` that has no factory of its own is built by `RequestValidatorAbstractFactory`,
-which uses `AttributeFactory`: **constructor parameters are injected by type** from the container, and `#[Use...]` attributes on them
-work as usual. A validator can therefore depend on other services without any registration, as long as it passes the
-`InputFilterPluginManager` on to the parent:
+Validators are built by `RequestValidatorAbstractFactory`, which wires constructor parameters by type, so they can depend on other
+services without registration. Pass laminas-inputfilter's `Factory` on to the parent:
 
 ```php
-/** @extends AbstractRequestValidator<RegisterUser> */
-final class RegisterUserValidator extends AbstractRequestValidator
+public function __construct(Factory $factory, private UserRepository $users)
 {
-    public function __construct(InputFilterPluginManager $inputFilters, private UserRepository $users)
-    {
-        parent::__construct($inputFilters);
-    }
-
-    protected function rules(): array
-    {
-        return ['email' => ['required' => true, 'validators' => [['name' => EmailAddress::class]]]];
-    }
-
-    protected function map(array $values): RegisterUser
-    {
-        $email = (string) $values['email'];
-
-        if ($this->users->emailExists($email)) {
-            throw new ValidationFailed(['email' => ['emailTaken' => 'That email address is already registered.']]);
-        }
-
-        return new RegisterUser($email);
-    }
+    parent::__construct($factory);
 }
 ```
 
-Register a factory of your own only when a dependency cannot be found by type, such as a scalar setting from config. Validators are
-shared services like any other; that is safe because `validate()` builds a fresh input filter each time and keeps no state.
+Register a factory of your own only for a dependency that cannot be found by type.
 
 ## Testing a validator
 
-A validator only needs an `InputFilterPluginManager` and a PSR-7 request, so it can be tested without the application:
+A validator needs only laminas-inputfilter's `Factory`, from a container with the laminas providers:
 
 ```php
-final class CreateUserValidatorTest extends TestCase
-{
-    private CreateUserValidator $validator;
-
-    protected function setUp(): void
-    {
-        $dependencies = [];
-        foreach ([
-            new \Laminas\Filter\ConfigProvider(),
-            new \Laminas\Validator\ConfigProvider(),
-            new \Laminas\InputFilter\ConfigProvider(),
-        ] as $provider) {
-            $dependencies = array_replace_recursive($dependencies, $provider()['dependencies']);
-        }
-
-        $container       = new ServiceManager($dependencies);
-        $this->validator = new CreateUserValidator($container->get(InputFilterPluginManager::class));
-    }
-
-    public function testMapsAValidBody(): void
-    {
-        $user = $this->validator->validate(
-            new ServerRequest()->withParsedBody(['email' => 'ann@example.com', 'name' => 'Ann']),
-        );
-
-        self::assertEquals(new CreateUser('ann@example.com', 'Ann', null), $user);
-    }
-
-    public function testRejectsABadEmail(): void
-    {
-        try {
-            $this->validator->validate(new ServerRequest()->withParsedBody(['email' => 'nope', 'name' => 'Ann']));
-            self::fail('Expected ValidationFailed.');
-        } catch (ValidationFailed $e) {
-            self::assertArrayHasKey('emailAddressInvalidFormat', $e->getMessages()['email']);
-        }
-    }
+$dependencies = [];
+foreach ([new \Laminas\Filter\ConfigProvider(), new \Laminas\Validator\ConfigProvider(), new \Laminas\InputFilter\ConfigProvider()] as $provider) {
+    $dependencies = array_replace_recursive($dependencies, $provider()['dependencies']);
 }
+
+$validator = new CreateUserValidator(new ServiceManager($dependencies)->get(\Laminas\InputFilter\Factory::class));
+$user      = $validator->validate(new ServerRequest()->withParsedBody(['email' => 'ann@example.com']));
 ```
 
-To test a GET validator the way it runs in an app, give the request an empty parsed body:
+A GET request in a real app has an empty parsed body rather than `null`. To test one the same way, use
 `new ServerRequest(method: 'GET')->withParsedBody([])->withQueryParams([...])`.
-
-In a handler's tests, replace the validator with a stub `RequestValidator` that returns a DTO or throws `ValidationFailed`.
 
 ## Coming from Laravel
 
 | Laravel `FormRequest` | This package |
 | --- | --- |
-| `rules()` | `rules()`, with laminas specs instead of rule strings |
-| `validationData()`: `all()`, the body merged over the query string | `data()`: the parsed body merged over the query string |
-| `prepareForValidation()` + `$this->merge([...])` | override `data()` and add the values |
-| `$this->route('id')` | `$request->getAttribute('id')` in `data()` |
-| `validated()` | the `$values` given to `map()` |
-| `after()` / `withValidator()` for checks across fields | throw `ValidationFailed` from `map()` |
-| `messages()` | the `messages` option of each validator |
-| `authorize()` | not part of validation: use an authorization middleware |
-| automatic `422` with `{"errors": ...}` | `ValidationFailedMiddleware` |
-| type-hint the request in a controller | `#[UseValidator]` on a handler constructor parameter |
+| `rules()` | `rules()`, as a laminas input filter specification |
+| `validationData()` | `data()` |
+| `prepareForValidation()` with `merge()` | override `data()` |
+| `validated()` | the `$values` passed to `map()` |
+| `after()` | throw `ValidationFailed` from `map()` |
+| automatic `422` | `ValidationFailedMiddleware` |
 
-Two differences matter in practice:
+## Upgrading from 0.1
 
-- Laravel's errors are lists of texts per field. Here they are keyed by failure code: `{"email": {"emailAddressInvalidFormat": "..."}}`.
-- Laravel's `required` rejects empty strings, and so does `'required' => true` here. Laravel's `nullable` is closest to `'required' => false`.
-- Laravel's `integer` rule checks without converting. Here, check with a validator such as `Digits` and convert in `map()` (see
-  [Filters run before validators](#filters-run-before-validators)).
-
-## Limitations
-
-- **Lists of plain values.** laminas-inputfilter's `ArrayInput`, meant for a list like `["a", "b"]`, currently passes the whole array
-  to each validator and lets a non-array through. Until that is fixed upstream, give the field no rules of its own
-  (`'required' => true` or `false`), then check its items in `map()` and throw `ValidationFailed` keyed by index. A list of
-  **objects** works, with `CollectionInputFilter`.
-- **`error_message` and `break_on_failure`** on an input have no visible effect. Use each validator's `messages` option and
-  `break_chain_on_failure` instead (see [Custom messages](#custom-messages)).
-- **A JSON body needs `BodyParamsMiddleware`.** Without it, the parsed body is empty and only the query string is used.
-
-## Reference
-
-| Class | What it is |
-| --- | --- |
-| `Ssmiff\MezzioValidator\RequestValidator<T>` | The interface: `validate(ServerRequestInterface): T`, throws `ValidationFailed`. Type-hint this. |
-| `Ssmiff\MezzioValidator\AbstractRequestValidator<T>` | The base class: implement `rules()` and `map()`, optionally override `data()`. |
-| `Ssmiff\MezzioValidator\Attribute\UseValidator` | Constructor parameter attribute: `#[UseValidator(SomeValidator::class)]`. Needs `AttributeFactory`. |
-| `Ssmiff\MezzioValidator\Exception\ValidationFailed` | Thrown on failure. `getMessages()`: `array<field, array<code, message>>`. |
-| `Ssmiff\MezzioValidator\Http\ValidationFailedMiddleware` | Turns `ValidationFailed` into a `422` JSON response. |
-| `Ssmiff\MezzioValidator\Factory\RequestValidatorAbstractFactory` | Builds every concrete `RequestValidator` without its own factory, wiring the constructor by type. |
-| `Ssmiff\MezzioValidator\ConfigProvider` | Registers the middleware and the abstract factory. |
+- `rules()` is now a laminas specification passed through unchanged: add `'name' => '<field>'` to every input spec, nested ones
+  included.
+- `AbstractRequestValidator`'s constructor takes `Laminas\InputFilter\Factory` instead of `InputFilterPluginManager`. Only validators
+  with their own constructor need changing.
 
 ## Development
 

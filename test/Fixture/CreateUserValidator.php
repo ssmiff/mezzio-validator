@@ -17,12 +17,13 @@ final class CreateUserValidator extends AbstractRequestValidator
     protected function rules(): array
     {
         return [
-            'email' => ['required' => true, 'validators' => [['name' => EmailAddress::class]]],
+            'email' => ['name' => 'email', 'required' => true, 'validators' => [['name' => EmailAddress::class]]],
             'name'  => [
+                'name'       => 'name',
                 'required'   => true,
                 'validators' => [['name' => StringLength::class, 'options' => ['min' => 2]]],
             ],
-            'age'   => ['required' => false, 'filters' => [['name' => ToInt::class]]],
+            'age'   => ['name' => 'age', 'required' => false, 'filters' => [['name' => ToInt::class]]],
         ];
     }
 
